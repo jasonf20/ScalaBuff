@@ -8,7 +8,8 @@ import java.io.File
 
 /**
  * Scala class generator.
- * @author Sandro Gržičić
+  *
+  * @author Sandro Gržičić
  */
 
 class Generator protected (sourceName: String, importedSymbols: Map[String, ImportedSymbol], generateJsonMethod: Boolean,
@@ -26,6 +27,16 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
   protected var optimizeForSpeed = true
 
   protected var lazyGetSerializedSize = false
+
+  protected var useArrays = false
+
+  protected def sequenceType = if (useArrays) "Array" else "scala.collection.immutable.Seq"
+  protected def sequenceImplementationType = if (useArrays) "Array" else "Vector"
+  protected def builderToSequence(builderName: String) = if (useArrays) {
+    s"$builderName.toArray"
+  } else {
+    s"Vector($builderName: _*)"
+  }
 
   /**
    * Generates the Scala class code.
@@ -130,7 +141,7 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
           case OPTIONAL =>
             out.append("Option[").append(field.fType.scalaType).append("] = ").append(field.defaultValue).append(",\n")
           case REPEATED =>
-            out.append("scala.collection.immutable.Seq[").append(field.fType.scalaType).append("] = Vector.empty[").append(field.fType.scalaType).append("],\n")
+            out.append(sequenceType).append("[").append(field.fType.scalaType).append("] = ").append(sequenceImplementationType).append(".empty[").append(field.fType.scalaType).append("],\n")
           case _ => // "missing combination <local child>"
         }
       }
@@ -180,7 +191,7 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
         out.append(indent1).append("def clear").append(field.name.camelCase).append(" = copy(").append(field.name.toScalaIdent).append(" = ")
         field.label match {
           case OPTIONAL => out.append("None")
-          case REPEATED => out.append("Vector.empty[").append(field.fType.scalaType).append("]")
+          case REPEATED => out.append(sequenceImplementationType).append(".empty[").append(field.fType.scalaType).append("]")
           case _        => // don't generate a clearer for REQUIRED fields -> would result in an illegal message
         }
         out.append(")\n")
@@ -334,9 +345,11 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
         .append(indent2).append("def __newMerged = ").append(name).append("(\n")
       fields.foreach { field =>
         out.append(indent3)
-        if (field.label == REPEATED) out.append("Vector(")
-        out.append(field.name.toTemporaryIdent)
-        if (field.label == REPEATED) out.append(": _*)")
+        if (field.label == REPEATED) {
+          out.append(builderToSequence(field.name.toTemporaryIdent))
+        } else {
+          out.append(field.name.toTemporaryIdent)
+        }
         out.append(",\n")
       }
       if (!fields.isEmpty) out.length -= 2
@@ -388,7 +401,7 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
         } else out.append("in.read").append(field.fType.name).append("()")
         if(isOptional) out.append(")")
         out.append("\n")
-        
+
         if (field.fType.packable && field.label == REPEATED) {
           out.append(indent3).append("case ").append((field.number << 3) | WIRETYPE_LENGTH_DELIMITED).append(" => ")
           out.append("\n")
@@ -589,6 +602,11 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
                 case "SPEED"        => optimizeForSpeed = true
                 case "CODE_SIZE"    => optimizeForSpeed = false
                 case "LITE_RUNTIME" => optimizeForSpeed = true
+                case _              => throw new InvalidOptionValueException(key, value)
+              }
+              case "use_arrays" => value.stripQuotes match {
+                case "true"         => useArrays = true
+                case "false"        => useArrays = false
                 case _              => throw new InvalidOptionValueException(key, value)
               }
               case _ => // ignore options which aren't recognized
