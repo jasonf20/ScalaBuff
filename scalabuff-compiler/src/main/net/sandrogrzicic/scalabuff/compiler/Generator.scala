@@ -166,6 +166,25 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
 
       out.append(" {\n\n")
 
+
+      val byteStringType = "com.google.protobuf.ByteString"
+
+      // Lazy String bytes
+      for (field <- fields if field.fType == FieldTypes.STRING) {
+        out.append(indent1).append("private lazy val ").append(field.name.toScalaIdent).append("AsBytes").append(": ")
+        field.label match {
+          case REQUIRED =>
+            out.append(byteStringType).append(" = ").append(byteStringType).append(".copyFromUtf8(").append(field.name.toScalaIdent).append(")").append("\n")
+          case OPTIONAL =>
+            out.append("Option[").append(byteStringType).append("] = ").append(field.name.toScalaIdent).append(".map(x => ")
+              .append(byteStringType).append(".copyFromUtf8(x))\n")
+          case REPEATED =>
+            out.append(sequenceType).append("[").append(byteStringType).append("] = ").append(field.name.toScalaIdent).append(".map(x => ")
+              .append(byteStringType).append(".copyFromUtf8(x))\n")
+          case _ => // "missing combination <local child>"
+        }
+      }
+
       // setters
       for (field <- fields) {
         field.label match {
@@ -192,9 +211,16 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
         field.label match {
           case OPTIONAL => out.append("None")
           case REPEATED => out.append(sequenceImplementationType).append(".empty[").append(field.fType.scalaType).append("]")
-          case _        => // don't generate a clearer for REQUIRED fields -> would result in an illegal message
+          case _ => // don't generate a clearer for REQUIRED fields -> would result in an illegal message
         }
         out.append(")\n")
+      }
+
+      def getTypeName(field: Field) = {
+        if (optimizeForSpeed && field.fType == FieldTypes.STRING) FieldTypes.BYTES.name else field.fType.name
+      }
+      def getFieldNameAsBytes(field: Field) = {
+        if (optimizeForSpeed && field.fType == FieldTypes.STRING) field.name.toScalaIdent + "AsBytes" else field.name.toScalaIdent
       }
 
       // writeTo(CodedOutputStream)
@@ -204,20 +230,20 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
       fields.foreach { field =>
         field.label match {
           case REQUIRED => out.append(indent2)
-            .append("output.write").append(field.fType.name).append("(")
-            .append(field.number).append(", ").append(field.name.toScalaIdent).append(")\n")
+            .append("output.write").append(getTypeName(field)).append("(")
+            .append(field.number).append(", ").append(getFieldNameAsBytes(field)).append(")\n")
           case OPTIONAL => out.append(indent2).append("if (")
             .append(field.name.toScalaIdent).append(".isDefined) ")
-            .append("output.write").append(field.fType.name).append("(")
-            .append(field.number).append(", ").append(field.name.toScalaIdent).append(".get)\n")
+            .append("output.write").append(getTypeName(field)).append("(")
+            .append(field.number).append(", ").append(getFieldNameAsBytes(field)).append(".get)\n")
           case REPEATED =>
             (field.fType.packable, field.options.filter(value => value.key == "packed" && value.value == "true").headOption) match {
               case (true, Some(option)) =>
                 out.append(indent2).append(s"// write field ${field.name} packed \n")
                 out.append(indent2).append("if (!").append(field.name.toScalaIdent).append(".isEmpty) {\n")
                 out.append(indent3).append("import com.google.protobuf.CodedOutputStream._\n")
-                out.append(indent3).append("val dataSize = ").append(field.name.toScalaIdent)
-                  .append(".map(compute").append(field.fType.name).append("SizeNoTag(_)).sum")
+                out.append(indent3).append("val dataSize = ").append(getFieldNameAsBytes(field))
+                  .append(".map(compute").append(getTypeName(field)).append("SizeNoTag(_)).sum")
                   .append(" \n")
                 out.append(indent3).append("output.writeRawVarint32(")
                   .append((field.number << 3) | WIRETYPE_LENGTH_DELIMITED).append(")").append("\n")
@@ -248,8 +274,8 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
           val indexName = s"index_${field.name.toScalaIdent}"
           out.append(i1).append(s"var $indexName = 0\n")
           out.append(i1).append(s"while (").append(indexName)
-            .append(" < ").append(field.name.toScalaIdent).append(".length) {\n")
-          out.append(i2).append("output.write").append(field.fType.name)
+            .append(" < ").append(getFieldNameAsBytes(field)).append(".length) {\n")
+          out.append(i2).append("output.write").append(getTypeName(field))
 
           if (!useTag) {
             out.append("NoTag")
@@ -260,7 +286,7 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
             out.append(field.number).append(", ")
           }
 
-          out.append(field.name.toScalaIdent)
+          out.append(getFieldNameAsBytes(field))
             .append("(").append(indexName).append("))\n")
           out.append(i2).append(indexName).append(" += 1\n")
           out.append(i1).append("}\n")
@@ -277,19 +303,19 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
       for (field <- fields) {
         field.label match {
           case REQUIRED => out.append(indent2)
-            .append("__size += compute").append(field.fType.name).append("Size(")
-            .append(field.number).append(", ").append(field.name.toScalaIdent).append(")\n")
+            .append("__size += compute").append(getTypeName(field)).append("Size(")
+            .append(field.number).append(", ").append(getFieldNameAsBytes(field)).append(")\n")
           case OPTIONAL => out.append(indent2).append("if (")
             .append(field.name.toScalaIdent).append(".isDefined) ")
-            .append("__size += compute").append(field.fType.name).append("Size(")
-            .append(field.number).append(", ").append(field.name.toScalaIdent).append(".get)\n")
+            .append("__size += compute").append(getTypeName(field)).append("Size(")
+            .append(field.number).append(", ").append(getFieldNameAsBytes(field)).append(".get)\n")
           case REPEATED =>
             // TODO make this nicer currently code is generated 2 times
             (field.fType.packable, field.options.find(value => value.key == "packed" && value.value == "true")) match {
               case (true, Some(option)) =>
                 out.append(indent2).append("if (!").append(field.name.toScalaIdent).append(".isEmpty) {\n")
-                out.append(indent3).append("val dataSize = ").append(field.name.toScalaIdent)
-                  .append(".map(compute").append(field.fType.name).append("SizeNoTag(_)).sum")
+                out.append(indent3).append("val dataSize = ").append(getFieldNameAsBytes(field))
+                  .append(".map(compute").append(getTypeName(field)).append("SizeNoTag(_)).sum")
                   .append(" \n")
 
                 val tagSize = CodedOutputStream.computeTagSize(field.number)
@@ -302,8 +328,8 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
                   out.append(indent2).append(s"while (").append(indexName)
                     .append(" < ").append(field.name.toScalaIdent).append(".length) {\n")
                   out.append(indent3).append("__size += compute")
-                    .append(field.fType.name).append("Size(")
-                    .append(field.number).append(", ").append(field.name.toScalaIdent)
+                    .append(getTypeName(field)).append("Size(")
+                    .append(field.number).append(", ").append(getFieldNameAsBytes(field))
                     .append("(").append(indexName).append("))\n")
                   out.append(indent3).append(indexName).append(" += 1\n")
                   out.append(indent2).append("}\n")
@@ -470,37 +496,37 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
       // toJson
       if (generateJsonMethod) {
         out
-        .append(indent1).append("def toJson(indent: Int = 0): String = {\n")
+          .append(indent1).append("def toJson(indent: Int = 0): String = {\n")
           .append(indent2).append("val indent0 = \"\\n\" + (\"\\t\" * indent)\n")
           .append(indent2).append("val (indent1, indent2) = (indent0 + \"\\t\", indent0 + \"\\t\\t\")\n")
           .append(indent2).append("val sb = StringBuilder.newBuilder\n")
           .append(indent2).append("sb\n")
           .append(indent3).append(".append(\"{\")\n")
 
-          for (field <- fields) {
-            val name = field.name.lowerCamelCase
-            val (quotesStart, quotesEnd) = if (!field.fType.isMessage) (".append(\"\\\"\")", ".append(\"\\\"\")") else ("", "")
-            val mapQuotes = if (!field.fType.isMessage) ".map(\"\\\"\" + _ + \"\\\"\")" else ""
-            val toJson = if (field.fType.isMessage) ".toJson(indent + 1)" else ""
-            val mapToJson = if (field.fType.isMessage) ".map(_.toJson(indent + 1))" else ""
+        for (field <- fields) {
+          val name = field.name.lowerCamelCase
+          val (quotesStart, quotesEnd) = if (!field.fType.isMessage) (".append(\"\\\"\")", ".append(\"\\\"\")") else ("", "")
+          val mapQuotes = if (!field.fType.isMessage) ".map(\"\\\"\" + _ + \"\\\"\")" else ""
+          val toJson = if (field.fType.isMessage) ".toJson(indent + 1)" else ""
+          val mapToJson = if (field.fType.isMessage) ".map(_.toJson(indent + 1))" else ""
 
-            field.label match {
-              case REQUIRED =>
-                out.append(indent3).append("sb.append(indent1).append(\"\\\"").append(name)
-                     .append("\\\": \")").append(quotesStart).append(".append(`").append(name)
-                     .append("`").append(toJson).append(")").append(quotesEnd).append(".append(',')").append('\n')
-              case OPTIONAL =>
-                out.append(indent3)
-                     .append("if (`").append(name).append("`.isDefined) { ").append("sb.append(indent1).append(\"\\\"").append(name)
-                     .append("\\\": \")").append(quotesStart).append(".append(`").append(name)
-                     .append("`.get").append(toJson).append(")").append(quotesEnd).append(".append(',') }").append('\n')
-              case REPEATED =>
-                out.append(indent3).append("sb.append(indent1).append(\"\\\"").append(name).append("\\\": [\")")
-                     .append(".append(indent2).append(`").append(name).append("`").append(mapToJson).append(mapQuotes)
-                     .append(".mkString(\", \" + indent2)).append(indent1).append(']').append(',')").append('\n')
-              case _ =>
-            }
+          field.label match {
+            case REQUIRED =>
+              out.append(indent3).append("sb.append(indent1).append(\"\\\"").append(name)
+                .append("\\\": \")").append(quotesStart).append(".append(`").append(name)
+                .append("`").append(toJson).append(")").append(quotesEnd).append(".append(',')").append('\n')
+            case OPTIONAL =>
+              out.append(indent3)
+                .append("if (`").append(name).append("`.isDefined) { ").append("sb.append(indent1).append(\"\\\"").append(name)
+                .append("\\\": \")").append(quotesStart).append(".append(`").append(name)
+                .append("`.get").append(toJson).append(")").append(quotesEnd).append(".append(',') }").append('\n')
+            case REPEATED =>
+              out.append(indent3).append("sb.append(indent1).append(\"\\\"").append(name).append("\\\": [\")")
+                .append(".append(indent2).append(`").append(name).append("`").append(mapToJson).append(mapQuotes)
+                .append(".mkString(\", \" + indent2)).append(indent1).append(']').append(',')").append('\n')
+            case _ =>
           }
+        }
         out.append(indent2).append("if (sb.last.equals(',')) sb.length -= 1\n")
         out.append(indent2).append("sb.append(indent0).append(\"}\")\n")
 
@@ -526,7 +552,7 @@ class Generator protected (sourceName: String, importedSymbols: Map[String, Impo
         .append(" = defaultInstance.mergeFrom(data)\n")
       out.append(indent1).append("def parseFrom(data: Array[Byte], offset: Int, length: Int): ").append(name)
         .append(" = defaultInstance.mergeFrom(data, offset, length)\n")
-      out.append(indent1).append("def parseFrom(byteString: com.google.protobuf.ByteString): ").append(name)
+      out.append(indent1).append("def parseFrom(byteString: " + byteStringType + "): ").append(name)
         .append(" = defaultInstance.mergeFrom(byteString)\n")
       out.append(indent1).append("def parseFrom(stream: java.io.InputStream): ").append(name)
         .append(" = defaultInstance.mergeFrom(stream)\n")
@@ -830,17 +856,17 @@ object Generator {
           body.messages.foreach(apply)
           body.fields.foreach { field =>
             val scalaType = if (field.fType.scalaType endsWith ".EnumVal")
-                field.fType.scalaType.split("\\.")(0)
-              else
-                field.fType.scalaType
+              field.fType.scalaType.split("\\.")(0)
+            else
+              field.fType.scalaType
             importedSymbols.filter {
               case (name, symbol) =>
                 val shortName = scalaType.stripPrefix(symbol.protoPackage + ".")
                 name == shortName || shortName.startsWith(name + ".")
             }.foreach {
               case (name, symbol) =>
-	              // namespaces might be empty for imported message types
-	              val namespacePrefix = if (symbol.packageName.isEmpty) "" else symbol.packageName + "."
+                // namespaces might be empty for imported message types
+                val namespacePrefix = if (symbol.packageName.isEmpty) "" else symbol.packageName + "."
                 val protoPkgPrefix = if (symbol.protoPackage.isEmpty) "" else symbol.protoPackage + "."
                 field.fType.scalaType = namespacePrefix + field.fType.scalaType.stripPrefix(protoPkgPrefix)
                 field.fType.defaultValue = namespacePrefix + field.fType.defaultValue.stripPrefix(protoPkgPrefix)
